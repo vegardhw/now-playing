@@ -229,8 +229,8 @@
   <script>
     // CONFIGURATION - Update these values
     const CONFIG = {
-      HA_URL: 'http://10.0.1.20:8123',
-      TOKEN: 'YOUR_LONG_LIVED_ACCESS_TOKEN',
+      // Using NGINX proxy - no direct HA URL or token needed (handled server-side)
+      API_PATH: '/ha-api',
       ENTITY: 'media_player.sonos_roam',
       UPDATE_INTERVAL: 2000, // milliseconds
       RETRY_DELAY: 5000 // milliseconds on error
@@ -372,15 +372,14 @@
       }
     }
 
-    // Fetch current playing track from Home Assistant
+    // Fetch current playing track from Home Assistant via NGINX proxy
     async function fetchNowPlaying() {
       if (isUpdating) return;
       isUpdating = true;
 
       try {
-        const response = await fetch(`${CONFIG.HA_URL}/api/states/${CONFIG.ENTITY}`, {
+        const response = await fetch(`${CONFIG.API_PATH}/states/${CONFIG.ENTITY}`, {
           headers: {
-            'Authorization': `Bearer ${CONFIG.TOKEN}`,
             'Content-Type': 'application/json'
           }
         });
@@ -401,7 +400,7 @@
           artist: data.attributes.media_artist || '',
           album: data.attributes.media_album_name || '',
           artwork: data.attributes.entity_picture 
-            ? `${CONFIG.HA_URL}${data.attributes.entity_picture}`
+            ? `${CONFIG.API_PATH}${data.attributes.entity_picture.replace('/api', '')}`
             : null
         };
 
@@ -434,15 +433,9 @@
     function init() {
       console.log('Initializing Now Playing display...');
       console.log('Configuration:', {
-        url: CONFIG.HA_URL,
-        entity: CONFIG.ENTITY,
-        hasToken: !!CONFIG.TOKEN && CONFIG.TOKEN !== 'YOUR_LONG_LIVED_ACCESS_TOKEN'
+        apiPath: CONFIG.API_PATH,
+        entity: CONFIG.ENTITY
       });
-
-      if (CONFIG.TOKEN === 'YOUR_LONG_LIVED_ACCESS_TOKEN') {
-        showError('Please configure your Home Assistant token');
-        return;
-      }
 
       fetchNowPlaying();
     }
