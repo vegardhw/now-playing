@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Now Playing</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #000;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* Animated background blur effect */
+    .background-blur {
+      position: fixed;
+      top: -50%;
+      left: -50%;
+      right: -50%;
+      bottom: -50%;
+      filter: blur(80px) saturate(1.8);
+      opacity: 0;
+      transition: opacity 1s ease;
+      z-index: 0;
+    }
+
+    .background-blur.visible {
+      opacity: 0.5;
+    }
+
+    .color-blob {
+      position: absolute;
+      border-radius: 50%;
+      mix-blend-mode: screen;
+    }
+
+    .blob-1 {
+      width: 600px;
+      height: 600px;
+      top: 20%;
+      left: 30%;
+      animation: float1 20s ease-in-out infinite;
+    }
+
+    .blob-2 {
+      width: 500px;
+      height: 500px;
+      top: 40%;
+      right: 25%;
+      animation: float2 18s ease-in-out infinite;
+    }
+
+    .blob-3 {
+      width: 450px;
+      height: 450px;
+      bottom: 20%;
+      left: 35%;
+      animation: float3 22s ease-in-out infinite;
+    }
+
+    @keyframes float1 {
+      0%, 100% { transform: translate(0, 0) scale(1); }
+      50% { transform: translate(50px, 30px) scale(1.1); }
+    }
+
+    @keyframes float2 {
+      0%, 100% { transform: translate(0, 0) scale(1); }
+      50% { transform: translate(-40px, -40px) scale(1.15); }
+    }
+
+    @keyframes float3 {
+      0%, 100% { transform: translate(0, 0) scale(1); }
+      50% { transform: translate(-30px, 40px) scale(1.08); }
+    }
+
+    /* Main content container */
+    .container {
+      position: relative;
+      z-index: 1;
+      text-align: center;
+      max-width: 90vw;
+      padding: 20px;
+    }
+
+    /* Album art container */
+    .artwork-container {
+      width: min(50vh, 80vw);
+      height: min(50vh, 80vw);
+      margin: 0 auto 40px;
+      position: relative;
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+      background: #1a1a1a;
+    }
+
+    .artwork-container img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      opacity: 0;
+      transition: opacity 0.5s ease;
+    }
+
+    .artwork-container img.loaded {
+      opacity: 1;
+    }
+
+    /* Track info */
+    .track-title {
+      font-size: clamp(24px, 4vw, 48px);
+      font-weight: 700;
+      color: #ffffff;
+      margin-bottom: 12px;
+      text-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+      line-height: 1.2;
+      opacity: 0;
+      transition: opacity 0.5s ease 0.2s;
+    }
+
+    .track-title.visible {
+      opacity: 1;
+    }
+
+    .track-artist {
+      font-size: clamp(18px, 3vw, 32px);
+      font-weight: 400;
+      color: rgba(255, 255, 255, 0.85);
+      margin-bottom: 8px;
+      text-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+      opacity: 0;
+      transition: opacity 0.5s ease 0.3s;
+    }
+
+    .track-artist.visible {
+      opacity: 1;
+    }
+
+    .track-album {
+      font-size: clamp(16px, 2.5vw, 26px);
+      font-weight: 300;
+      color: rgba(255, 255, 255, 0.65);
+      text-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+      opacity: 0;
+      transition: opacity 0.5s ease 0.4s;
+    }
+
+    .track-album.visible {
+      opacity: 1;
+    }
+
+    /* Loading state */
+    .loading {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: rgba(255, 255, 255, 0.5);
+      font-size: 18px;
+    }
+
+    /* Error state */
+    .error-message {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(255, 0, 0, 0.2);
+      border: 1px solid rgba(255, 0, 0, 0.5);
+      color: #fff;
+      padding: 12px 24px;
+      border-radius: 6px;
+      font-size: 14px;
+      display: none;
+      z-index: 1000;
+    }
+
+    .error-message.visible {
+      display: block;
+    }
+
+    /* Responsive adjustments */
+    @media (max-width: 768px) {
+      .container {
+        padding: 10px;
+      }
+
+      .artwork-container {
+        margin-bottom: 30px;
+      }
+    }
+
+    /* Hide canvas used for color extraction */
+    #colorCanvas {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="background-blur" id="backgroundBlur">
+    <div class="color-blob blob-1" id="blob1"></div>
+    <div class="color-blob blob-2" id="blob2"></div>
+    <div class="color-blob blob-3" id="blob3"></div>
+  </div>
+
+  <div class="container">
+    <div class="artwork-container">
+      <img id="artwork" alt="Album artwork" crossorigin="anonymous">
+    </div>
+    <div class="track-title" id="title">Track title</div>
+    <div class="track-artist" id="artist">Artist</div>
+    <div class="track-album" id="album">Album title</div>
+  </div>
+
+  <div class="error-message" id="errorMessage"></div>
+  <canvas id="colorCanvas"></canvas>
+
+  <script>
+    // CONFIGURATION - Update these values
+    const CONFIG = {
+      HA_URL: 'http://10.0.1.20:8123',
+      TOKEN: 'YOUR_LONG_LIVED_ACCESS_TOKEN',
+      ENTITY: 'media_player.sonos_roam',
+      UPDATE_INTERVAL: 2000, // milliseconds
+      RETRY_DELAY: 5000 // milliseconds on error
+    };
+
+    // State management
+    let currentTrack = null;
+    let updateTimer = null;
+    let isUpdating = false;
+
+    // DOM elements
+    const elements = {
+      artwork: document.getElementById('artwork'),
+      title: document.getElementById('title'),
+      artist: document.getElementById('artist'),
+      album: document.getElementById('album'),
+      backgroundBlur: document.getElementById('backgroundBlur'),
+      blob1: document.getElementById('blob1'),
+      blob2: document.getElementById('blob2'),
+      blob3: document.getElementById('blob3'),
+      errorMessage: document.getElementById('errorMessage'),
+      canvas: document.getElementById('colorCanvas')
+    };
+
+    // Show error message
+    function showError(message) {
+      console.error('Error:', message);
+      elements.errorMessage.textContent = message;
+      elements.errorMessage.classList.add('visible');
+      setTimeout(() => {
+        elements.errorMessage.classList.remove('visible');
+      }, 5000);
+    }
+
+    // Extract dominant colors from image
+    function extractColors(img) {
+      try {
+        const canvas = elements.canvas;
+        const ctx = canvas.getContext('2d');
+        
+        // Use smaller canvas for performance
+        canvas.width = 100;
+        canvas.height = 100;
+        
+        ctx.drawImage(img, 0, 0, 100, 100);
+        const imageData = ctx.getImageData(0, 0, 100, 100);
+        const data = imageData.data;
+        
+        // Sample colors (every 10th pixel for performance)
+        const colorMap = {};
+        for (let i = 0; i < data.length; i += 40) { // 40 = 10 pixels * 4 (RGBA)
+          const r = data[i];
+          const g = data[i + 1];
+          const b = data[i + 2];
+          const a = data[i + 3];
+          
+          // Skip transparent or too dark/light pixels
+          if (a < 128 || (r + g + b) < 100 || (r + g + b) > 650) continue;
+          
+          // Round to nearest 30 to group similar colors
+          const key = `${Math.round(r/30)*30},${Math.round(g/30)*30},${Math.round(b/30)*30}`;
+          colorMap[key] = (colorMap[key] || 0) + 1;
+        }
+        
+        // Get top 3 colors
+        const sortedColors = Object.entries(colorMap)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 3)
+          .map(([color]) => `rgb(${color})`);
+        
+        // Ensure we have at least 3 colors
+        while (sortedColors.length < 3) {
+          sortedColors.push('rgb(100,100,100)');
+        }
+        
+        return sortedColors;
+      } catch (error) {
+        console.error('Color extraction error:', error);
+        return ['rgb(100,100,100)', 'rgb(120,120,120)', 'rgb(80,80,80)'];
+      }
+    }
+
+    // Update background colors
+    function updateBackgroundColors(colors) {
+      elements.blob1.style.background = `radial-gradient(circle, ${colors[0]} 0%, transparent 70%)`;
+      elements.blob2.style.background = `radial-gradient(circle, ${colors[1]} 0%, transparent 70%)`;
+      elements.blob3.style.background = `radial-gradient(circle, ${colors[2]} 0%, transparent 70%)`;
+      
+      // Fade in the background
+      requestAnimationFrame(() => {
+        elements.backgroundBlur.classList.add('visible');
+      });
+    }
+
+    // Update the display with new track info
+    function updateDisplay(trackData) {
+      const { title, artist, album, artwork } = trackData;
+      
+      // Update text content
+      elements.title.textContent = title || 'No track playing';
+      elements.artist.textContent = artist || '';
+      elements.album.textContent = album || '';
+
+      // Show text with transitions
+      requestAnimationFrame(() => {
+        elements.title.classList.add('visible');
+        elements.artist.classList.add('visible');
+        elements.album.classList.add('visible');
+      });
+
+      // Update artwork
+      if (artwork) {
+        const img = elements.artwork;
+        img.classList.remove('loaded');
+        
+        img.onload = function() {
+          img.classList.add('loaded');
+          
+          // Extract and apply colors
+          try {
+            const colors = extractColors(img);
+            updateBackgroundColors(colors);
+          } catch (error) {
+            console.error('Failed to extract colors:', error);
+          }
+        };
+        
+        img.onerror = function() {
+          console.error('Failed to load artwork');
+          img.src = '';
+        };
+        
+        img.src = artwork;
+      } else {
+        elements.artwork.src = '';
+        elements.artwork.classList.remove('loaded');
+        // Use default colors
+        updateBackgroundColors(['rgb(40,40,60)', 'rgb(60,40,60)', 'rgb(40,60,60)']);
+      }
+    }
+
+    // Fetch current playing track from Home Assistant
+    async function fetchNowPlaying() {
+      if (isUpdating) return;
+      isUpdating = true;
+
+      try {
+        const response = await fetch(`${CONFIG.HA_URL}/api/states/${CONFIG.ENTITY}`, {
+          headers: {
+            'Authorization': `Bearer ${CONFIG.TOKEN}`,
+            'Content-Type': 'application/json'
+          }
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        
+        // Check if media player is available
+        if (data.state === 'unavailable') {
+          throw new Error('Media player is unavailable');
+        }
+
+        const trackData = {
+          title: data.attributes.media_title || 'No track playing',
+          artist: data.attributes.media_artist || '',
+          album: data.attributes.media_album_name || '',
+          artwork: data.attributes.entity_picture 
+            ? `${CONFIG.HA_URL}${data.attributes.entity_picture}`
+            : null
+        };
+
+        // Only update if track has changed
+        const trackKey = `${trackData.title}-${trackData.artist}`;
+        if (trackKey !== currentTrack) {
+          currentTrack = trackKey;
+          updateDisplay(trackData);
+        }
+
+      } catch (error) {
+        showError(`Connection error: ${error.message}`);
+        console.error('Fetch error:', error);
+        
+        // Retry with longer delay on error
+        if (updateTimer) clearTimeout(updateTimer);
+        updateTimer = setTimeout(fetchNowPlaying, CONFIG.RETRY_DELAY);
+        isUpdating = false;
+        return;
+      }
+
+      isUpdating = false;
+      
+      // Schedule next update
+      if (updateTimer) clearTimeout(updateTimer);
+      updateTimer = setTimeout(fetchNowPlaying, CONFIG.UPDATE_INTERVAL);
+    }
+
+    // Initialize
+    function init() {
+      console.log('Initializing Now Playing display...');
+      console.log('Configuration:', {
+        url: CONFIG.HA_URL,
+        entity: CONFIG.ENTITY,
+        hasToken: !!CONFIG.TOKEN && CONFIG.TOKEN !== 'YOUR_LONG_LIVED_ACCESS_TOKEN'
+      });
+
+      if (CONFIG.TOKEN === 'YOUR_LONG_LIVED_ACCESS_TOKEN') {
+        showError('Please configure your Home Assistant token');
+        return;
+      }
+
+      fetchNowPlaying();
+    }
+
+    // Start when page loads
+    window.addEventListener('load', init);
+
+    // Cleanup on page unload
+    window.addEventListener('beforeunload', () => {
+      if (updateTimer) clearTimeout(updateTimer);
+    });
+  </script>
+</body>
+</html>
