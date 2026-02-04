@@ -4,6 +4,24 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Now Playing</title>
+
+  <script>
+    // ============================================
+    // CONFIGURATION - Edit these values as needed
+    // ============================================
+
+    // Set to true to use test data without Home Assistant connection
+    const DEV_MODE = true;
+
+    // Home Assistant media player entity ID
+    const MEDIA_PLAYER = 'media_player.sonos_roam';
+
+    // NGINX proxy path for Home Assistant API
+    const API_PATH = '/ha-api';
+
+    // ============================================
+  </script>
+
   <style>
     * {
       margin: 0;
@@ -22,66 +40,52 @@
       position: relative;
     }
 
-    /* Animated background blur effect */
+    /* Blurred album art background */
     .background-blur {
       position: fixed;
-      top: -50%;
-      left: -50%;
-      right: -50%;
-      bottom: -50%;
-      filter: blur(80px) saturate(1.8);
-      opacity: 0;
-      transition: opacity 1s ease;
+      top: -10%;
+      left: -10%;
+      right: -10%;
+      bottom: -10%;
       z-index: 0;
+      overflow: hidden;
     }
 
-    .background-blur.visible {
-      opacity: 0.5;
+    .background-blur img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      filter: blur(60px) saturate(1.4) brightness(0.6);
+      transform: scale(1.1);
+      opacity: 0;
+      transition: opacity 1.5s ease;
     }
 
-    .color-blob {
-      position: absolute;
-      border-radius: 50%;
-      mix-blend-mode: screen;
+    .background-blur img.visible {
+      opacity: 0.6;
     }
 
-    .blob-1 {
-      width: 600px;
-      height: 600px;
-      top: 20%;
-      left: 30%;
-      animation: float1 20s ease-in-out infinite;
+    /* Subtle slow-moving animation for the background */
+    .background-blur img.visible {
+      animation: slowDrift 30s ease-in-out infinite;
     }
 
-    .blob-2 {
-      width: 500px;
-      height: 500px;
-      top: 40%;
-      right: 25%;
-      animation: float2 18s ease-in-out infinite;
+    @keyframes slowDrift {
+      0%, 100% { transform: scale(1.1) translate(0, 0); }
+      25% { transform: scale(1.15) translate(2%, -1%); }
+      50% { transform: scale(1.1) translate(-1%, 2%); }
+      75% { transform: scale(1.12) translate(-2%, -1%); }
     }
 
-    .blob-3 {
-      width: 450px;
-      height: 450px;
-      bottom: 20%;
-      left: 35%;
-      animation: float3 22s ease-in-out infinite;
-    }
-
-    @keyframes float1 {
-      0%, 100% { transform: translate(0, 0) scale(1); }
-      50% { transform: translate(50px, 30px) scale(1.1); }
-    }
-
-    @keyframes float2 {
-      0%, 100% { transform: translate(0, 0) scale(1); }
-      50% { transform: translate(-40px, -40px) scale(1.15); }
-    }
-
-    @keyframes float3 {
-      0%, 100% { transform: translate(0, 0) scale(1); }
-      50% { transform: translate(-30px, 40px) scale(1.08); }
+    /* Dark overlay for better contrast */
+    .background-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: radial-gradient(ellipse at center, transparent 0%, rgba(0,0,0,0.4) 100%);
+      z-index: 0;
     }
 
     /* Main content container */
@@ -200,19 +204,13 @@
         margin-bottom: 30px;
       }
     }
-
-    /* Hide canvas used for color extraction */
-    #colorCanvas {
-      display: none;
-    }
   </style>
 </head>
 <body>
   <div class="background-blur" id="backgroundBlur">
-    <div class="color-blob blob-1" id="blob1"></div>
-    <div class="color-blob blob-2" id="blob2"></div>
-    <div class="color-blob blob-3" id="blob3"></div>
+    <img id="backgroundArt" alt="">
   </div>
+  <div class="background-overlay"></div>
 
   <div class="container">
     <div class="artwork-container">
@@ -224,16 +222,25 @@
   </div>
 
   <div class="error-message" id="errorMessage"></div>
-  <canvas id="colorCanvas"></canvas>
 
   <script>
     // CONFIGURATION - Update these values
+    // Internal configuration (uses values from top of file)
     const CONFIG = {
-      // Using NGINX proxy - no direct HA URL or token needed (handled server-side)
-      API_PATH: '/ha-api',
-      ENTITY: 'media_player.sonos_roam',
+      API_PATH: API_PATH,
+      ENTITY: MEDIA_PLAYER,
       UPDATE_INTERVAL: 2000, // milliseconds
-      RETRY_DELAY: 5000 // milliseconds on error
+      RETRY_DELAY: 5000, // milliseconds on error
+
+      // Development mode - uses value from top of file
+      DEV_MODE: DEV_MODE,
+      DEV_DATA: {
+        title: 'Test Track Title',
+        artist: 'Test Artist',
+        album: 'Test Album',
+        // Using a public domain album art for testing
+        artwork: 'https://picsum.photos/seed/jazz/500/500'
+      }
     };
 
     // State management
@@ -247,12 +254,8 @@
       title: document.getElementById('title'),
       artist: document.getElementById('artist'),
       album: document.getElementById('album'),
-      backgroundBlur: document.getElementById('backgroundBlur'),
-      blob1: document.getElementById('blob1'),
-      blob2: document.getElementById('blob2'),
-      blob3: document.getElementById('blob3'),
-      errorMessage: document.getElementById('errorMessage'),
-      canvas: document.getElementById('colorCanvas')
+      backgroundArt: document.getElementById('backgroundArt'),
+      errorMessage: document.getElementById('errorMessage')
     };
 
     // Show error message
@@ -265,70 +268,10 @@
       }, 5000);
     }
 
-    // Extract dominant colors from image
-    function extractColors(img) {
-      try {
-        const canvas = elements.canvas;
-        const ctx = canvas.getContext('2d');
-        
-        // Use smaller canvas for performance
-        canvas.width = 100;
-        canvas.height = 100;
-        
-        ctx.drawImage(img, 0, 0, 100, 100);
-        const imageData = ctx.getImageData(0, 0, 100, 100);
-        const data = imageData.data;
-        
-        // Sample colors (every 10th pixel for performance)
-        const colorMap = {};
-        for (let i = 0; i < data.length; i += 40) { // 40 = 10 pixels * 4 (RGBA)
-          const r = data[i];
-          const g = data[i + 1];
-          const b = data[i + 2];
-          const a = data[i + 3];
-          
-          // Skip transparent or too dark/light pixels
-          if (a < 128 || (r + g + b) < 100 || (r + g + b) > 650) continue;
-          
-          // Round to nearest 30 to group similar colors
-          const key = `${Math.round(r/30)*30},${Math.round(g/30)*30},${Math.round(b/30)*30}`;
-          colorMap[key] = (colorMap[key] || 0) + 1;
-        }
-        
-        // Get top 3 colors
-        const sortedColors = Object.entries(colorMap)
-          .sort((a, b) => b[1] - a[1])
-          .slice(0, 3)
-          .map(([color]) => `rgb(${color})`);
-        
-        // Ensure we have at least 3 colors
-        while (sortedColors.length < 3) {
-          sortedColors.push('rgb(100,100,100)');
-        }
-        
-        return sortedColors;
-      } catch (error) {
-        console.error('Color extraction error:', error);
-        return ['rgb(100,100,100)', 'rgb(120,120,120)', 'rgb(80,80,80)'];
-      }
-    }
-
-    // Update background colors
-    function updateBackgroundColors(colors) {
-      elements.blob1.style.background = `radial-gradient(circle, ${colors[0]} 0%, transparent 70%)`;
-      elements.blob2.style.background = `radial-gradient(circle, ${colors[1]} 0%, transparent 70%)`;
-      elements.blob3.style.background = `radial-gradient(circle, ${colors[2]} 0%, transparent 70%)`;
-      
-      // Fade in the background
-      requestAnimationFrame(() => {
-        elements.backgroundBlur.classList.add('visible');
-      });
-    }
-
     // Update the display with new track info
     function updateDisplay(trackData) {
       const { title, artist, album, artwork } = trackData;
-      
+
       // Update text content
       elements.title.textContent = title || 'No track playing';
       elements.artist.textContent = artist || '';
@@ -344,31 +287,32 @@
       // Update artwork
       if (artwork) {
         const img = elements.artwork;
+        const bgImg = elements.backgroundArt;
+
         img.classList.remove('loaded');
-        
+        bgImg.classList.remove('visible');
+
         img.onload = function() {
           img.classList.add('loaded');
-          
-          // Extract and apply colors
-          try {
-            const colors = extractColors(img);
-            updateBackgroundColors(colors);
-          } catch (error) {
-            console.error('Failed to extract colors:', error);
-          }
         };
-        
+
         img.onerror = function() {
           console.error('Failed to load artwork');
           img.src = '';
         };
-        
+
+        bgImg.onload = function() {
+          bgImg.classList.add('visible');
+        };
+
+        // Set both images to same source
         img.src = artwork;
+        bgImg.src = artwork;
       } else {
         elements.artwork.src = '';
         elements.artwork.classList.remove('loaded');
-        // Use default colors
-        updateBackgroundColors(['rgb(40,40,60)', 'rgb(60,40,60)', 'rgb(40,60,60)']);
+        elements.backgroundArt.src = '';
+        elements.backgroundArt.classList.remove('visible');
       }
     }
 
@@ -389,7 +333,7 @@
         }
 
         const data = await response.json();
-        
+
         // Check if media player is available
         if (data.state === 'unavailable') {
           throw new Error('Media player is unavailable');
@@ -414,7 +358,7 @@
       } catch (error) {
         showError(`Connection error: ${error.message}`);
         console.error('Fetch error:', error);
-        
+
         // Retry with longer delay on error
         if (updateTimer) clearTimeout(updateTimer);
         updateTimer = setTimeout(fetchNowPlaying, CONFIG.RETRY_DELAY);
@@ -423,7 +367,7 @@
       }
 
       isUpdating = false;
-      
+
       // Schedule next update
       if (updateTimer) clearTimeout(updateTimer);
       updateTimer = setTimeout(fetchNowPlaying, CONFIG.UPDATE_INTERVAL);
@@ -434,8 +378,16 @@
       console.log('Initializing Now Playing display...');
       console.log('Configuration:', {
         apiPath: CONFIG.API_PATH,
-        entity: CONFIG.ENTITY
+        entity: CONFIG.ENTITY,
+        devMode: CONFIG.DEV_MODE
       });
+
+      // Use static test data in dev mode
+      if (CONFIG.DEV_MODE) {
+        console.log('DEV MODE: Using static test data');
+        updateDisplay(CONFIG.DEV_DATA);
+        return;
+      }
 
       fetchNowPlaying();
     }
