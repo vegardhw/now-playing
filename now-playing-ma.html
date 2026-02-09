@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Now Playing - Music Assistant</title>
+
+  <script>
+    // ============================================
+    // CONFIGURATION - Edit these values as needed
+    // ============================================
+
+    // Set to true to use test data without Music Assistant connection
+    const DEV_MODE = true;
+
+    // Music Assistant player ID (e.g., 'sonos_roam' or full player_id from MA)
+    const PLAYER_ID = 'sonos_roam';
+
+    // Music Assistant server URL (WebSocket)
+    // Default port is 8095 for Music Assistant
+    const MA_WS_URL = 'ws://localhost:8095/ws';
+
+    // Music Assistant server base URL (for image proxying)
+    const MA_BASE_URL = 'http://localhost:8095';
+
+    // ============================================
+  </script>
+
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #000;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* Blurred album art background */
+    .background-blur {
+      position: fixed;
+      top: -10%;
+      left: -10%;
+      right: -10%;
+      bottom: -10%;
+      z-index: 0;
+      overflow: hidden;
+    }
+
+    .background-blur img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      filter: blur(60px) saturate(1.4) brightness(0.6);
+      transform: scale(1.1);
+      opacity: 0;
+      transition: opacity 1.5s ease;
+    }
+
+    .background-blur img.visible {
+      opacity: 0.6;
+    }
+
+    /* Subtle slow-moving animation for the background */
+    .background-blur img.visible {
+      animation: slowDrift 30s ease-in-out infinite;
+    }
+
+    @keyframes slowDrift {
+      0%, 100% { transform: scale(1.1) translate(0, 0); }
+      25% { transform: scale(1.15) translate(2%, -1%); }
+      50% { transform: scale(1.1) translate(-1%, 2%); }
+      75% { transform: scale(1.12) translate(-2%, -1%); }
+    }
+
+    /* Dark overlay for better contrast */
+    .background-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: radial-gradient(ellipse at center, transparent 0%, rgba(0,0,0,0.4) 100%);
+      z-index: 0;
+    }
+
+    /* Main content container */
+    .container {
+      position: relative;
+      z-index: 1;
+      text-align: center;
+      max-width: 90vw;
+      padding: 20px;
+    }
+
+    /* Album art container */
+    .artwork-container {
+      width: min(50vh, 80vw);
+      height: min(50vh, 80vw);
+      margin: 0 auto 40px;
+      position: relative;
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+      background: #1a1a1a;
+    }
+
+    .artwork-container img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      opacity: 0;
+      transition: opacity 0.5s ease;
+    }
+
+    .artwork-container img.loaded {
+      opacity: 1;
+    }
+
+    /* Track info */
+    .track-title {
+      font-size: clamp(24px, 4vw, 48px);
+      font-weight: 700;
+      color: #ffffff;
+      margin-bottom: 12px;
+      text-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+      line-height: 1.2;
+      opacity: 0;
+      transition: opacity 0.5s ease 0.2s;
+    }
+
+    .track-title.visible {
+      opacity: 1;
+    }
+
+    .track-artist {
+      font-size: clamp(18px, 3vw, 32px);
+      font-weight: 400;
+      color: rgba(255, 255, 255, 0.85);
+      margin-bottom: 8px;
+      text-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+      opacity: 0;
+      transition: opacity 0.5s ease 0.3s;
+    }
+
+    .track-artist.visible {
+      opacity: 1;
+    }
+
+    .track-album {
+      font-size: clamp(16px, 2.5vw, 26px);
+      font-weight: 300;
+      color: rgba(255, 255, 255, 0.65);
+      text-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+      opacity: 0;
+      transition: opacity 0.5s ease 0.4s;
+    }
+
+    .track-album.visible {
+      opacity: 1;
+    }
+
+    /* Loading state */
+    .loading {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: rgba(255, 255, 255, 0.5);
+      font-size: 18px;
+    }
+
+    /* Error state */
+    .error-message {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(255, 0, 0, 0.2);
+      border: 1px solid rgba(255, 0, 0, 0.5);
+      color: #fff;
+      padding: 12px 24px;
+      border-radius: 6px;
+      font-size: 14px;
+      display: none;
+      z-index: 1000;
+    }
+
+    .error-message.visible {
+      display: block;
+    }
+
+    /* Responsive adjustments */
+    @media (max-width: 768px) {
+      .container {
+        padding: 10px;
+      }
+
+      .artwork-container {
+        margin-bottom: 30px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="background-blur" id="backgroundBlur">
+    <img id="backgroundArt" alt="">
+  </div>
+  <div class="background-overlay"></div>
+
+  <div class="container">
+    <div class="artwork-container">
+      <img id="artwork" alt="Album artwork" crossorigin="anonymous">
+    </div>
+    <div class="track-title" id="title">Track title</div>
+    <div class="track-artist" id="artist">Artist</div>
+    <div class="track-album" id="album">Album title</div>
+  </div>
+
+  <div class="error-message" id="errorMessage"></div>
+
+  <script>
+    // Internal configuration (uses values from top of file)
+    const CONFIG = {
+      WS_URL: MA_WS_URL,
+      BASE_URL: MA_BASE_URL,
+      PLAYER_ID: PLAYER_ID,
+      RECONNECT_DELAY: 5000, // milliseconds on disconnect
+
+      // Development mode - uses value from top of file
+      DEV_MODE: DEV_MODE,
+      DEV_DATA: {
+        title: 'Test Track Title',
+        artist: 'Test Artist',
+        album: 'Test Album',
+        // Using a public domain album art for testing
+        artwork: 'https://picsum.photos/seed/jazz/500/500'
+      }
+    };
+
+    // State management
+    let currentTrack = null;
+    let websocket = null;
+    let reconnectTimer = null;
+    let messageId = 0;
+
+    // DOM elements
+    const elements = {
+      artwork: document.getElementById('artwork'),
+      title: document.getElementById('title'),
+      artist: document.getElementById('artist'),
+      album: document.getElementById('album'),
+      backgroundArt: document.getElementById('backgroundArt'),
+      errorMessage: document.getElementById('errorMessage')
+    };
+
+    // Show error message
+    function showError(message) {
+      console.error('Error:', message);
+      elements.errorMessage.textContent = message;
+      elements.errorMessage.classList.add('visible');
+      setTimeout(() => {
+        elements.errorMessage.classList.remove('visible');
+      }, 5000);
+    }
+
+    // Get next message ID for WebSocket commands
+    function getNextMessageId() {
+      return ++messageId;
+    }
+
+    // Build image URL from Music Assistant image data
+    function buildImageUrl(imageData) {
+      if (!imageData) return null;
+      
+      // Music Assistant provides image paths that can be accessed via the server
+      // The image path could be a full URL or a relative path
+      if (imageData.path) {
+        // If it's already a full URL, use it directly
+        if (imageData.path.startsWith('http://') || imageData.path.startsWith('https://')) {
+          return imageData.path;
+        }
+        // Otherwise, construct URL using the MA base URL
+        return `${CONFIG.BASE_URL}${imageData.path}`;
+      }
+      
+      // Fallback: use image_url if available
+      if (imageData.url) {
+        return imageData.url;
+      }
+      
+      return null;
+    }
+
+    // Extract track data from Music Assistant queue item
+    function extractTrackData(queueItem) {
+      if (!queueItem || !queueItem.media_item) {
+        return null;
+      }
+
+      const mediaItem = queueItem.media_item;
+      
+      // Get artist name(s)
+      let artist = '';
+      if (mediaItem.artists && mediaItem.artists.length > 0) {
+        artist = mediaItem.artists.map(a => a.name).join(', ');
+      } else if (mediaItem.artist) {
+        artist = typeof mediaItem.artist === 'string' ? mediaItem.artist : mediaItem.artist.name;
+      }
+
+      // Get album name
+      let album = '';
+      if (mediaItem.album) {
+        album = typeof mediaItem.album === 'string' ? mediaItem.album : mediaItem.album.name;
+      }
+
+      // Get artwork URL
+      let artwork = null;
+      if (mediaItem.image) {
+        artwork = buildImageUrl(mediaItem.image);
+      } else if (mediaItem.metadata?.images && mediaItem.metadata.images.length > 0) {
+        artwork = buildImageUrl(mediaItem.metadata.images[0]);
+      } else if (queueItem.image) {
+        artwork = buildImageUrl(queueItem.image);
+      }
+
+      return {
+        title: mediaItem.name || 'Unknown Track',
+        artist: artist,
+        album: album,
+        artwork: artwork
+      };
+    }
+
+    // Update the display with new track info
+    function updateDisplay(trackData) {
+      const { title, artist, album, artwork } = trackData;
+
+      // Update text content
+      elements.title.textContent = title || 'No track playing';
+      elements.artist.textContent = artist || '';
+      elements.album.textContent = album || '';
+
+      // Show text with transitions
+      requestAnimationFrame(() => {
+        elements.title.classList.add('visible');
+        elements.artist.classList.add('visible');
+        elements.album.classList.add('visible');
+      });
+
+      // Update artwork
+      if (artwork) {
+        const img = elements.artwork;
+        const bgImg = elements.backgroundArt;
+
+        img.classList.remove('loaded');
+        bgImg.classList.remove('visible');
+
+        img.onload = function() {
+          img.classList.add('loaded');
+        };
+
+        img.onerror = function() {
+          console.error('Failed to load artwork:', artwork);
+          img.src = '';
+        };
+
+        bgImg.onload = function() {
+          bgImg.classList.add('visible');
+        };
+
+        // Set both images to same source
+        img.src = artwork;
+        bgImg.src = artwork;
+      } else {
+        elements.artwork.src = '';
+        elements.artwork.classList.remove('loaded');
+        elements.backgroundArt.src = '';
+        elements.backgroundArt.classList.remove('visible');
+      }
+    }
+
+    // Send a command to Music Assistant via WebSocket
+    function sendCommand(command, args = {}) {
+      if (!websocket || websocket.readyState !== WebSocket.OPEN) {
+        console.error('WebSocket not connected');
+        return null;
+      }
+
+      const msgId = getNextMessageId();
+      const message = {
+        message_id: msgId,
+        command: command,
+        ...args
+      };
+
+      console.log('Sending command:', message);
+      websocket.send(JSON.stringify(message));
+      return msgId;
+    }
+
+    // Request current player queue state
+    function requestPlayerState() {
+      // Get the player's active queue
+      sendCommand('player_queues/get_active_queue', {
+        player_id: CONFIG.PLAYER_ID
+      });
+    }
+
+    // Handle incoming WebSocket messages
+    function handleMessage(event) {
+      try {
+        const data = JSON.parse(event.data);
+        console.log('Received:', data);
+
+        // Handle different message types
+        if (data.event) {
+          // This is an event notification
+          handleEvent(data);
+        } else if (data.result !== undefined) {
+          // This is a response to a command
+          handleCommandResponse(data);
+        }
+      } catch (error) {
+        console.error('Error parsing message:', error);
+      }
+    }
+
+    // Handle event notifications from Music Assistant
+    function handleEvent(data) {
+      const eventType = data.event;
+      const eventData = data.data || {};
+
+      // Listen for queue updates that affect our player
+      if (eventType === 'queue_updated' || eventType === 'queue_item_updated') {
+        if (eventData.queue_id === CONFIG.PLAYER_ID || 
+            eventData.player_id === CONFIG.PLAYER_ID) {
+          // Request fresh state when queue changes
+          requestPlayerState();
+        }
+      }
+
+      // Listen for player state changes
+      if (eventType === 'player_updated') {
+        if (eventData.player_id === CONFIG.PLAYER_ID) {
+          requestPlayerState();
+        }
+      }
+    }
+
+    // Handle command responses
+    function handleCommandResponse(data) {
+      if (data.result && data.result.current_item) {
+        // This is a queue state response
+        const trackData = extractTrackData(data.result.current_item);
+        
+        if (trackData) {
+          // Only update if track has changed
+          const trackKey = `${trackData.title}-${trackData.artist}`;
+          if (trackKey !== currentTrack) {
+            currentTrack = trackKey;
+            updateDisplay(trackData);
+          }
+        }
+      } else if (data.result && Array.isArray(data.result)) {
+        // This might be a players list response - find our player
+        const player = data.result.find(p => 
+          p.player_id === CONFIG.PLAYER_ID || 
+          p.name.toLowerCase().includes(CONFIG.PLAYER_ID.toLowerCase())
+        );
+        
+        if (player && player.current_item) {
+          const trackData = extractTrackData(player.current_item);
+          if (trackData) {
+            const trackKey = `${trackData.title}-${trackData.artist}`;
+            if (trackKey !== currentTrack) {
+              currentTrack = trackKey;
+              updateDisplay(trackData);
+            }
+          }
+        }
+      }
+    }
+
+    // Connect to Music Assistant WebSocket
+    function connectWebSocket() {
+      console.log('Connecting to Music Assistant:', CONFIG.WS_URL);
+
+      try {
+        websocket = new WebSocket(CONFIG.WS_URL);
+
+        websocket.onopen = function() {
+          console.log('WebSocket connected');
+          
+          // Subscribe to events for our player
+          sendCommand('subscribe_events');
+          
+          // Request initial player state
+          setTimeout(() => {
+            requestPlayerState();
+          }, 500);
+        };
+
+        websocket.onmessage = handleMessage;
+
+        websocket.onerror = function(error) {
+          console.error('WebSocket error:', error);
+          showError('Connection error');
+        };
+
+        websocket.onclose = function(event) {
+          console.log('WebSocket closed:', event.code, event.reason);
+          websocket = null;
+
+          // Attempt to reconnect
+          if (reconnectTimer) clearTimeout(reconnectTimer);
+          reconnectTimer = setTimeout(() => {
+            console.log('Attempting to reconnect...');
+            connectWebSocket();
+          }, CONFIG.RECONNECT_DELAY);
+        };
+
+      } catch (error) {
+        console.error('Failed to create WebSocket:', error);
+        showError(`Connection failed: ${error.message}`);
+        
+        // Retry connection
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        reconnectTimer = setTimeout(connectWebSocket, CONFIG.RECONNECT_DELAY);
+      }
+    }
+
+    // Initialize
+    function init() {
+      console.log('Initializing Now Playing display (Music Assistant)...');
+      console.log('Configuration:', {
+        wsUrl: CONFIG.WS_URL,
+        baseUrl: CONFIG.BASE_URL,
+        playerId: CONFIG.PLAYER_ID,
+        devMode: CONFIG.DEV_MODE
+      });
+
+      // Use static test data in dev mode
+      if (CONFIG.DEV_MODE) {
+        console.log('DEV MODE: Using static test data');
+        updateDisplay(CONFIG.DEV_DATA);
+        return;
+      }
+
+      connectWebSocket();
+    }
+
+    // Start when page loads
+    window.addEventListener('load', init);
+
+    // Cleanup on page unload
+    window.addEventListener('beforeunload', () => {
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (websocket) {
+        websocket.close();
+      }
+    });
+  </script>
+</body>
+</html>
