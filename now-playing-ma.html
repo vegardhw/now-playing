@@ -11,17 +11,20 @@
     // ============================================
 
     // Set to true to use test data without Music Assistant connection
-    const DEV_MODE = true;
+    const DEV_MODE = false;
+
+    // Music Assistant Personal Access Token (PAT)
+    const MA_ACCESS_TOKEN = '<token_here>';
 
     // Music Assistant player ID (e.g., 'sonos_roam' or full player_id from MA)
-    const PLAYER_ID = 'sonos_roam';
+    const PLAYER_ID = 'media_player.sonos_play5';
 
     // Music Assistant server URL (WebSocket)
     // Default port is 8095 for Music Assistant
-    const MA_WS_URL = 'ws://localhost:8095/ws';
+    const MA_WS_URL = 'ws://10.0.1.20:8095/ws';
 
     // Music Assistant server base URL (for image proxying)
-    const MA_BASE_URL = 'http://localhost:8095';
+    const MA_BASE_URL = 'http://10.0.1.20:8095';
 
     // ============================================
   </script>
@@ -233,6 +236,8 @@
       WS_URL: MA_WS_URL,
       BASE_URL: MA_BASE_URL,
       PLAYER_ID: PLAYER_ID,
+      ACCESS_TOKEN: MA_ACCESS_TOKEN,
+      UPDATE_INTERVAL: 5000,
       RECONNECT_DELAY: 5000, // milliseconds on disconnect
 
       // Development mode - uses value from top of file
@@ -251,6 +256,9 @@
     let websocket = null;
     let reconnectTimer = null;
     let messageId = 0;
+    let authMessageId = null;
+    let subscribeMessageId = null;
+    let updateTimer = null;
 
     // DOM elements
     const elements = {
@@ -286,18 +294,50 @@
       if (imageData.path) {
         // If it's already a full URL, use it directly
         if (imageData.path.startsWith('http://') || imageData.path.startsWith('https://')) {
-          return imageData.path;
+          return addAccessTokenToUrl(imageData.path);
         }
         // Otherwise, construct URL using the MA base URL
-        return `${CONFIG.BASE_URL}${imageData.path}`;
+        return addAccessTokenToUrl(`${CONFIG.BASE_URL}${imageData.path}`);
       }
       
       // Fallback: use image_url if available
       if (imageData.url) {
-        return imageData.url;
+        return addAccessTokenToUrl(imageData.url);
       }
       
       return null;
+    }
+
+    function addAccessTokenToUrl(url) {
+      if (!CONFIG.ACCESS_TOKEN) return url;
+
+      try {
+        const parsedUrl = new URL(url, window.location.origin);
+        if (!parsedUrl.searchParams.has('access_token')) {
+          parsedUrl.searchParams.set('access_token', CONFIG.ACCESS_TOKEN);
+        }
+        return parsedUrl.toString();
+      } catch (error) {
+        const separator = url.includes('?') ? '&' : '?';
+        if (url.includes('access_token=')) return url;
+        return `${url}${separator}access_token=${encodeURIComponent(CONFIG.ACCESS_TOKEN)}`;
+      }
+    }
+
+    function buildWebSocketUrl(baseUrl) {
+      if (!CONFIG.ACCESS_TOKEN) return baseUrl;
+
+      try {
+        const parsedUrl = new URL(baseUrl, window.location.origin);
+        if (!parsedUrl.searchParams.has('access_token')) {
+          parsedUrl.searchParams.set('access_token', CONFIG.ACCESS_TOKEN);
+        }
+        return parsedUrl.toString();
+      } catch (error) {
+        const separator = baseUrl.includes('?') ? '&' : '?';
+        if (baseUrl.includes('access_token=')) return baseUrl;
+        return `${baseUrl}${separator}access_token=${encodeURIComponent(CONFIG.ACCESS_TOKEN)}`;
+      }
     }
 
     // Extract track data from Music Assistant queue item
@@ -398,12 +438,47 @@
       const msgId = getNextMessageId();
       const message = {
         message_id: msgId,
-        command: command,
-        ...args
+        command: command
       };
+
+      if (args && Object.keys(args).length > 0) {
+        message.args = args;
+      }
 
       console.log('Sending command:', message);
       websocket.send(JSON.stringify(message));
+      return msgId;
+    }
+
+    function startPolling() {
+      if (updateTimer) return;
+      updateTimer = setInterval(requestPlayerState, CONFIG.UPDATE_INTERVAL);
+    }
+
+    function stopPolling() {
+      if (updateTimer) {
+        clearInterval(updateTimer);
+        updateTimer = null;
+      }
+    }
+
+    // Authenticate the WebSocket session using a PAT
+    function sendAuth() {
+      if (!CONFIG.ACCESS_TOKEN) return null;
+      if (!websocket || websocket.readyState !== WebSocket.OPEN) return null;
+
+      const msgId = getNextMessageId();
+      const message = {
+        message_id: msgId,
+        command: 'auth',
+        args: {
+          token: CONFIG.ACCESS_TOKEN
+        }
+      };
+
+      console.log('Sending auth command');
+      websocket.send(JSON.stringify(message));
+      authMessageId = msgId;
       return msgId;
     }
 
@@ -458,6 +533,22 @@
 
     // Handle command responses
     function handleCommandResponse(data) {
+      if (subscribeMessageId && data.message_id === subscribeMessageId && data.error_code) {
+        console.warn('Event subscribe failed, switching to polling:', data.details || data.error_code);
+        startPolling();
+        return;
+      }
+
+      if (data.error_code === 20) {
+        console.warn('Authentication required. Sending auth command.');
+        sendAuth();
+        return;
+      }
+
+      if (authMessageId && data.message_id === authMessageId) {
+        console.log('Auth response received');
+      }
+
       if (data.result && data.result.current_item) {
         // This is a queue state response
         const trackData = extractTrackData(data.result.current_item);
@@ -492,21 +583,22 @@
 
     // Connect to Music Assistant WebSocket
     function connectWebSocket() {
-      console.log('Connecting to Music Assistant:', CONFIG.WS_URL);
+      const wsUrl = buildWebSocketUrl(CONFIG.WS_URL);
+      console.log('Connecting to Music Assistant:', wsUrl);
 
       try {
-        websocket = new WebSocket(CONFIG.WS_URL);
+        websocket = new WebSocket(wsUrl);
 
         websocket.onopen = function() {
           console.log('WebSocket connected');
-          
-          // Subscribe to events for our player
-          sendCommand('subscribe_events');
-          
-          // Request initial player state
+
+          sendAuth();
+
+          // Subscribe to events for our player after auth
           setTimeout(() => {
+            subscribeMessageId = sendCommand('subscribe_events');
             requestPlayerState();
-          }, 500);
+          }, 300);
         };
 
         websocket.onmessage = handleMessage;
@@ -519,6 +611,7 @@
         websocket.onclose = function(event) {
           console.log('WebSocket closed:', event.code, event.reason);
           websocket = null;
+          stopPolling();
 
           // Attempt to reconnect
           if (reconnectTimer) clearTimeout(reconnectTimer);
@@ -555,6 +648,11 @@
         return;
       }
 
+      if (!CONFIG.ACCESS_TOKEN) {
+        showError('Missing Music Assistant access token (PAT).');
+        return;
+      }
+
       connectWebSocket();
     }
 
@@ -567,6 +665,7 @@
       if (websocket) {
         websocket.close();
       }
+      stopPolling();
     });
   </script>
 </body>
