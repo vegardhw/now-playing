@@ -1,109 +1,89 @@
 # Now Playing
 
-A beautiful "Now Playing" display for Home Assistant media players, featuring album artwork with a blurred background effect.
+A "Now Playing" display featuring album artwork with a blurred background effect. Supports both **Home Assistant** and **Music Assistant** as sources.
 
-![Now Playing Display](https://via.placeholder.com/800x500/1a1a1a/ffffff?text=Now+Playing+Display)
+## Files
 
-## Overview
+| File | Description |
+|------|-------------|
+| `now-playing-ha.html` | Now Playing display via Home Assistant API |
+| `now-playing-ma.html` | Now Playing display via Music Assistant WebSocket |
+| `discover-players-ma.html` | Helper tool to list available Music Assistant player IDs |
 
-This is a single HTML file that displays the currently playing track from a Home Assistant media player (e.g., Sonos, Chromecast, etc.). It features:
+---
 
-- Large album artwork display
-- Track title, artist, and album name
-- Blurred album art background with subtle animation
-- Auto-updates every 2 seconds
-- Dark theme optimized for displays/kiosks
-- Responsive design for various screen sizes
+## now-playing-ha.html
 
-## Requirements
+Polls a Home Assistant media player entity every 2 seconds and displays the current track.
 
-- **Home Assistant** with a media player entity
-- **NGINX Proxy Manager** (or similar reverse proxy) to handle API authentication
-- A web server to host the HTML file (can be the same NGINX)
+**Configuration** — edit the block at the top of the file:
 
-## Configuration
+| Variable | Description |
+|----------|-------------|
+| `DEV_MODE` | `true` shows static test data; set to `false` for production |
+| `MEDIA_PLAYER` | HA entity ID, e.g. `media_player.sonos_roam` |
+| `API_PATH` | NGINX proxy path forwarding to the HA API, e.g. `/api/ha` |
 
-Edit the configuration section at the top of `now-playing.html`:
+### NGINX Proxy Manager Setup
 
-```javascript
-// ============================================
-// CONFIGURATION - Edit these values as needed
-// ============================================
+Because the page runs in the browser it cannot call the HA API directly (CORS). Use a reverse proxy to forward requests and inject the auth token server-side.
 
-// Set to true to use test data without Home Assistant connection
-const DEV_MODE = true;
-
-// Home Assistant media player entity ID
-const MEDIA_PLAYER = 'media_player.sonos_roam';
-
-// NGINX proxy path for Home Assistant API
-const API_PATH = '/ha-api';
-
-// ============================================
-```
-
-| Setting | Description |
-|---------|-------------|
-| `DEV_MODE` | Set to `true` to display test data without connecting to Home Assistant. Useful for development and testing the visual layout. |
-| `MEDIA_PLAYER` | The entity ID of your Home Assistant media player (e.g., `media_player.sonos_roam`, `media_player.living_room_speaker`). |
-| `API_PATH` | The proxy path configured in NGINX that forwards requests to Home Assistant. |
-
-## NGINX Proxy Manager Setup
-
-Since the HTML runs in the browser, it cannot directly access Home Assistant's API due to CORS restrictions. You need to set up a reverse proxy that:
-
-1. Forwards API requests to Home Assistant
-2. Injects the authentication token server-side
-
-### Setup Steps
-
-1. In NGINX Proxy Manager, edit your proxy host
-2. Go to **Custom locations** tab
-3. Add a new location:
-   - **Location**: `/ha-api`
-   - **Scheme**: `http`
-   - **Forward Hostname/IP**: Your Home Assistant IP (e.g., `10.0.5.50`)
-   - **Forward Port**: `8123`
-4. Click the ⚙️ gear icon and add this custom configuration:
+1. In NGINX Proxy Manager, open your proxy host → **Custom locations**
+2. Add a location:
+   - **Location**: `/api/ha` (match `API_PATH`)
+   - **Forward**: `http://<HA_IP>:8123`
+3. Add custom NGINX config:
 
 ```nginx
-rewrite ^/ha-api/(.*) /$1 break;
+rewrite ^/api/ha/(.*) /$1 break;
 proxy_set_header Authorization "Bearer YOUR_LONG_LIVED_ACCESS_TOKEN";
 proxy_set_header Host $host;
 ```
 
-5. Replace `YOUR_LONG_LIVED_ACCESS_TOKEN` with your actual Home Assistant long-lived access token
+To get a token: HA profile → **Long-Lived Access Tokens** → **Create Token**.
 
-### Getting a Home Assistant Token
+---
 
-1. Go to your Home Assistant profile (click your username in the sidebar)
-2. Scroll down to **Long-Lived Access Tokens**
-3. Click **Create Token**
-4. Give it a name (e.g., "Now Playing Display")
-5. Copy the token and use it in the NGINX configuration
+## now-playing-ma.html
 
-## Development Mode
+Connects to Music Assistant over WebSocket and displays the current track in real time.
 
-When `DEV_MODE` is set to `true`, the page displays static test data with a random album art image. This is useful for:
+**Configuration** — edit the block at the top of the file:
 
-- Testing the visual design without Home Assistant
-- Developing on a machine that can't reach your Home Assistant instance
-- Demonstrating the display without a live media player
+| Variable | Description |
+|----------|-------------|
+| `DEV_MODE` | `true` shows static test data; set to `false` for production |
+| `MA_ACCESS_TOKEN` | Music Assistant Personal Access Token (PAT) |
+| `PLAYER_ID` | MA player ID to monitor (use `discover-players-ma.html` to find it) |
+| `MA_WS_URL` | WebSocket URL, e.g. `ws://192.168.1.20:8095/ws` |
+| `MA_BASE_URL` | HTTP base URL for image proxying, e.g. `http://192.168.1.20:8095` |
 
-Set `DEV_MODE` to `false` when deploying for production use.
+---
+
+## discover-players-ma.html
+
+Connects to Music Assistant and lists all available players with their IDs. Use this to look up the value for `PLAYER_ID` in `now-playing-ma.html`.
+
+**Configuration** — edit the two variables at the top of the script block:
+
+| Variable | Description |
+|----------|-------------|
+| `MA_ACCESS_TOKEN` | Same PAT used in `now-playing-ma.html` |
+| `MA_WS_URL` | Same WebSocket URL used in `now-playing-ma.html` |
+
+---
 
 ## Deployment
 
-1. Copy `now-playing.html` to your web server
-2. Configure NGINX Proxy Manager as described above
-3. Set `DEV_MODE` to `false`
-4. Update `MEDIA_PLAYER` with your entity ID
-5. Access the page through your web server
+1. Copy the desired HTML file(s) to your web server
+2. Set `DEV_MODE` to `false` and fill in all configuration variables
+3. For `now-playing-ha.html`, configure the NGINX proxy as described above
+4. Access the page through your web server
 
 ## Usage Ideas
 
 - **Kiosk display**: Run on a Raspberry Pi connected to a monitor
-- **Dashboard panel**: Embed in Home Assistant as a webpage card
+- **Dashboard panel**: Embed as a webpage card in Home Assistant or MA
 - **Smart mirror**: Integrate into a magic mirror display
 
 ## License

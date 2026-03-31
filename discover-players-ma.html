@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Music Assistant - Player Discovery</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #1a1a1a;
+      color: #fff;
+      padding: 20px;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    h1 {
+      color: #4a9eff;
+      margin-bottom: 20px;
+    }
+    .status {
+      padding: 10px;
+      margin-bottom: 20px;
+      border-radius: 4px;
+      background: #2a2a2a;
+    }
+    .status.connected {
+      background: #1a4d2e;
+      color: #4ade80;
+    }
+    .status.error {
+      background: #4d1a1a;
+      color: #ff6b6b;
+    }
+    .player-list {
+      margin-top: 20px;
+    }
+    .player {
+      background: #2a2a2a;
+      padding: 15px;
+      margin-bottom: 10px;
+      border-radius: 4px;
+      border-left: 4px solid #4a9eff;
+    }
+    .player.sonos {
+      border-left-color: #ff6b4a;
+      background: #2d2a2a;
+    }
+    .player-name {
+      font-size: 18px;
+      font-weight: bold;
+      margin-bottom: 5px;
+      color: #4a9eff;
+    }
+    .player.sonos .player-name {
+      color: #ff6b4a;
+    }
+    .player-id {
+      font-family: monospace;
+      color: #a0a0a0;
+      font-size: 14px;
+    }
+    .player-info {
+      margin-top: 8px;
+      font-size: 14px;
+      color: #b0b0b0;
+    }
+    pre {
+      background: #0a0a0a;
+      padding: 10px;
+      border-radius: 4px;
+      overflow-x: auto;
+      font-size: 12px;
+      color: #a0a0a0;
+    }
+    button {
+      background: #4a9eff;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      margin-right: 10px;
+    }
+    button:hover {
+      background: #3a7edf;
+    }
+    button:active {
+      background: #2a6ecf;
+    }
+    .controls {
+      margin-bottom: 20px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Music Assistant - Player Discovery</h1>
+  
+  <div class="controls">
+    <button onclick="refreshPlayers()">Refresh Players</button>
+    <button onclick="showRawData()">Show Raw JSON</button>
+  </div>
+
+  <div id="status" class="status">Connecting...</div>
+  
+  <div class="player-list" id="playerList"></div>
+  
+  <div id="rawData" style="display: none;">
+    <h2>Raw Player Data</h2>
+    <pre id="rawJson"></pre>
+  </div>
+
+  <script>
+    // Configuration from now-playing-ma.html
+    const MA_ACCESS_TOKEN = '';
+    const MA_WS_URL = 'ws://192.168.1.20:8095/ws';
+
+    let websocket = null;
+    let messageId = 0;
+    let allPlayersData = null;
+
+    function getNextMessageId() {
+      return ++messageId;
+    }
+
+    function updateStatus(message, type = 'normal') {
+      const statusEl = document.getElementById('status');
+      statusEl.textContent = message;
+      statusEl.className = 'status ' + type;
+    }
+
+    function buildWebSocketUrl(baseUrl) {
+      if (!MA_ACCESS_TOKEN) return baseUrl;
+
+      try {
+        const parsedUrl = new URL(baseUrl, window.location.origin);
+        if (!parsedUrl.searchParams.has('access_token')) {
+          parsedUrl.searchParams.set('access_token', MA_ACCESS_TOKEN);
+        }
+        return parsedUrl.toString();
+      } catch (error) {
+        const separator = baseUrl.includes('?') ? '&' : '?';
+        if (baseUrl.includes('access_token=')) return baseUrl;
+        return `${baseUrl}${separator}access_token=${encodeURIComponent(MA_ACCESS_TOKEN)}`;
+      }
+    }
+
+    function sendCommand(command, args = {}) {
+      if (!websocket || websocket.readyState !== WebSocket.OPEN) {
+        console.error('WebSocket not connected');
+        return null;
+      }
+
+      const msgId = getNextMessageId();
+      const message = {
+        message_id: msgId,
+        command: command
+      };
+
+      if (args && Object.keys(args).length > 0) {
+        message.args = args;
+      }
+
+      console.log('Sending command:', message);
+      websocket.send(JSON.stringify(message));
+      return msgId;
+    }
+
+    function sendAuth() {
+      if (!MA_ACCESS_TOKEN) return null;
+      if (!websocket || websocket.readyState !== WebSocket.OPEN) return null;
+
+      const msgId = getNextMessageId();
+      const message = {
+        message_id: msgId,
+        command: 'auth',
+        args: {
+          token: MA_ACCESS_TOKEN
+        }
+      };
+
+      console.log('Sending auth command');
+      websocket.send(JSON.stringify(message));
+      return msgId;
+    }
+
+    function displayPlayers(players) {
+      allPlayersData = players;
+      const playerList = document.getElementById('playerList');
+      
+      if (!players || players.length === 0) {
+        playerList.innerHTML = '<div class="player">No players found</div>';
+        return;
+      }
+
+      // Sort players - Sonos first
+      const sortedPlayers = [...players].sort((a, b) => {
+        const aIsSonos = (a.name?.toLowerCase().includes('sonos') || 
+                         a.player_id?.toLowerCase().includes('sonos'));
+        const bIsSonos = (b.name?.toLowerCase().includes('sonos') || 
+                         b.player_id?.toLowerCase().includes('sonos'));
+        if (aIsSonos && !bIsSonos) return -1;
+        if (!aIsSonos && bIsSonos) return 1;
+        return 0;
+      });
+
+      playerList.innerHTML = sortedPlayers.map(player => {
+        const isSonos = player.name?.toLowerCase().includes('sonos') || 
+                        player.player_id?.toLowerCase().includes('sonos');
+        
+        return `
+          <div class="player ${isSonos ? 'sonos' : ''}">
+            <div class="player-name">${player.name || 'Unnamed Player'}</div>
+            <div class="player-id">Player ID: <strong>${player.player_id}</strong></div>
+            <div class="player-info">
+              Type: ${player.type || 'unknown'} | 
+              Provider: ${player.provider || 'unknown'} | 
+              Available: ${player.available ? 'Yes' : 'No'} |
+              Powered: ${player.powered ? 'On' : 'Off'}
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      // Find and highlight Sonos Roam
+      const sonosRoam = players.find(p => 
+        p.name?.toLowerCase().includes('roam') || 
+        p.player_id?.toLowerCase().includes('roam')
+      );
+
+      if (sonosRoam) {
+        console.log('\n🎵 SONOS ROAM FOUND:');
+        console.log('Player ID:', sonosRoam.player_id);
+        console.log('Player Name:', sonosRoam.name);
+        console.log('Full player data:', sonosRoam);
+      }
+    }
+
+    function handleMessage(event) {
+      try {
+        const data = JSON.parse(event.data);
+        console.log('Received:', data);
+
+        if (data.error_code === 20) {
+          console.warn('Authentication required. Sending auth command.');
+          sendAuth();
+          return;
+        }
+
+        // Check for players list in result
+        if (data.result && Array.isArray(data.result)) {
+          console.log(`Found ${data.result.length} players:`, data.result);
+          displayPlayers(data.result);
+          updateStatus(`Found ${data.result.length} players`, 'connected');
+        }
+
+        // Also check for single player result
+        if (data.result && data.result.player_id) {
+          console.log('Single player result:', data.result);
+        }
+
+      } catch (error) {
+        console.error('Error parsing message:', error);
+        updateStatus('Error parsing response', 'error');
+      }
+    }
+
+    function connectWebSocket() {
+      const wsUrl = buildWebSocketUrl(MA_WS_URL);
+      console.log('Connecting to Music Assistant:', wsUrl);
+      updateStatus('Connecting to Music Assistant...');
+
+      try {
+        websocket = new WebSocket(wsUrl);
+
+        websocket.onopen = function() {
+          console.log('WebSocket connected');
+          updateStatus('Connected, authenticating...', 'connected');
+
+          sendAuth();
+
+          // Request all players after a short delay
+          setTimeout(() => {
+            updateStatus('Requesting player list...', 'connected');
+            
+            // Try multiple possible commands to get players
+            sendCommand('players/all');
+            setTimeout(() => sendCommand('players/get_all'), 100);
+            setTimeout(() => sendCommand('players/list'), 200);
+            setTimeout(() => sendCommand('get_players'), 300);
+            
+          }, 500);
+        };
+
+        websocket.onmessage = handleMessage;
+
+        websocket.onerror = function(error) {
+          console.error('WebSocket error:', error);
+          updateStatus('Connection error', 'error');
+        };
+
+        websocket.onclose = function(event) {
+          console.log('WebSocket closed:', event.code, event.reason);
+          updateStatus('Connection closed', 'error');
+          websocket = null;
+        };
+
+      } catch (error) {
+        console.error('Failed to create WebSocket:', error);
+        updateStatus(`Connection failed: ${error.message}`, 'error');
+      }
+    }
+
+    function refreshPlayers() {
+      if (websocket && websocket.readyState === WebSocket.OPEN) {
+        updateStatus('Refreshing player list...', 'connected');
+        sendCommand('players/all');
+        setTimeout(() => sendCommand('players/get_all'), 100);
+        setTimeout(() => sendCommand('players/list'), 200);
+      } else {
+        connectWebSocket();
+      }
+    }
+
+    function showRawData() {
+      const rawDataEl = document.getElementById('rawData');
+      const rawJsonEl = document.getElementById('rawJson');
+      
+      if (allPlayersData) {
+        rawJsonEl.textContent = JSON.stringify(allPlayersData, null, 2);
+        rawDataEl.style.display = rawDataEl.style.display === 'none' ? 'block' : 'none';
+      } else {
+        alert('No player data available yet. Wait for players to load.');
+      }
+    }
+
+    // Initialize on load
+    window.addEventListener('load', () => {
+      console.log('Starting Music Assistant Player Discovery...');
+      connectWebSocket();
+    });
+
+    // Cleanup
+    window.addEventListener('beforeunload', () => {
+      if (websocket) {
+        websocket.close();
+      }
+    });
+  </script>
+</body>
+</html>
