@@ -112,14 +112,28 @@
 
   <script>
     // Configuration from now-playing-ma.html
-    // Uses the same same-origin API_PATH approach as now-playing-ma.html,
-    // routed through the same NGINX Proxy Manager /api/ma custom location,
-    // so the browser correctly upgrades to wss:/https: when this page is
-    // served over TLS (a raw ws:// URL would otherwise be blocked as
-    // mixed content). See README.md / npm-ma.conf for the NPM setup.
     const MA_ACCESS_TOKEN = '';
+
+    // Set to true to connect directly to Music Assistant's LAN address,
+    // bypassing NGINX Proxy Manager entirely (no /api/ma custom location
+    // needed on the NPM side). Only works if this page itself is opened
+    // over plain http:// (or file://) -- NOT https:// -- since browsers
+    // block a plain ws:// connection from a page loaded over https:
+    // (mixed content).
+    //
+    // Set to false (default) to go through the same same-origin API_PATH
+    // used by now-playing-ma.html, routed through the NGINX Proxy Manager
+    // /api/ma custom location. Use this when opening the page through your
+    // normal HTTPS-served domain.
+    const DIRECT_MODE = false;
+
+    // Only used when DIRECT_MODE = true
+    const DIRECT_WS_URL = 'ws://192.168.1.20:8095/ws';
+
+    // Only used when DIRECT_MODE = false (see npm-ma.conf / README.md)
     const API_PATH = '/api/ma';
-    const MA_WS_URL = `${API_PATH}/ws`;
+
+    const MA_WS_URL = DIRECT_MODE ? DIRECT_WS_URL : `${API_PATH}/ws`;
 
     let websocket = null;
     let messageId = 0;

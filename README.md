@@ -81,16 +81,18 @@ Create the PAT under Music Assistant's user settings and put it in `MA_ACCESS_TO
 
 Connects to Music Assistant and lists all available players with their IDs. Use this to look up the value for `PLAYER_ID` in `now-playing-ma.html`.
 
-It uses the same same-origin `API_PATH` approach as `now-playing-ma.html`, routed through the same NGINX Proxy Manager `/api/ma` custom location (see `npm-ma.conf`). This avoids the mixed-content `"The operation is insecure"` error that a raw `ws://` URL would trigger when the page is served over HTTPS.
+By default (`DIRECT_MODE = false`) it uses the same same-origin `API_PATH` approach as `now-playing-ma.html`, routed through the same NGINX Proxy Manager `/api/ma` custom location (see `npm-ma.conf`). This avoids the mixed-content `"The operation is insecure"` error that a raw `ws://` URL would trigger when the page is served over HTTPS. Deploy it alongside `now-playing-ma.html` on your web server — no additional NPM config needed beyond the `/api/ma` location you already set up.
 
-If you'd rather run this one-off tool without going through NPM at all (e.g. quickly open the file locally against a LAN-only MA server), you can instead set `MA_WS_URL` back to a direct `ws://<MA_IP>:8095/ws` URL — just make sure you open the page itself over plain `http://` (or `file://`) in that case, not `https://`, or the browser will block the insecure WebSocket the same way.
+Set `DIRECT_MODE = true` to instead connect straight to Music Assistant's LAN address (`DIRECT_WS_URL`), bypassing NGINX Proxy Manager entirely — useful for a quick one-off check without touching NPM at all. This only works if you open the page itself over plain `http://` (or `file://`), **not** `https://`, since browsers block a plain `ws://` connection from a page loaded over `https://` (mixed content) regardless of this setting.
 
 **Configuration** — edit the variables at the top of the script block:
 
 | Variable | Description |
 |----------|-------------|
 | `MA_ACCESS_TOKEN` | Music Assistant PAT (same one used in `now-playing-ma.html`) |
-| `API_PATH` | Same NGINX proxy path used in `now-playing-ma.html`, e.g. `/api/ma` |
+| `DIRECT_MODE` | `false` (default) = via NPM `API_PATH`; `true` = direct LAN connection via `DIRECT_WS_URL` |
+| `DIRECT_WS_URL` | Direct WebSocket URL to your MA server, e.g. `ws://192.168.1.20:8095/ws` (only used when `DIRECT_MODE = true`) |
+| `API_PATH` | Same NGINX proxy path used in `now-playing-ma.html`, e.g. `/api/ma` (only used when `DIRECT_MODE = false`) |
 
 ---
 
