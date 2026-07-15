@@ -49,20 +49,21 @@ Connects to Music Assistant over WebSocket and displays the current track in rea
 | Variable | Description |
 |----------|-------------|
 | `DEV_MODE` | `true` shows static test data; set to `false` for production |
+| `MA_ACCESS_TOKEN` | Music Assistant Personal Access Token (PAT) |
 | `PLAYER_ID` | MA player ID to monitor (use `discover-players-ma.html` to find it) |
 | `API_PATH` | NGINX proxy path forwarding to the MA server, e.g. `/api/ma` |
 
 The WebSocket (`{API_PATH}/ws`) and image proxy (`{API_PATH}/imageproxy`) requests are both built as same-origin relative URLs from `API_PATH`, so the browser automatically uses `wss:`/`https:` when the page itself is served over TLS.
 
-Unlike Home Assistant, there's no `MA_ACCESS_TOKEN` field to fill in — the PAT is never stored in this file or exposed in the page source. Instead, NGINX Proxy Manager injects it server-side into every proxied request (see below), exactly like the `Authorization` header trick used for HA.
+Unlike Home Assistant, `MA_ACCESS_TOKEN` **must** be set in this file (it can't be injected server-side). Music Assistant's WebSocket API requires the client to send an in-band `"auth"` JSON command after connecting — a reverse proxy only sees raw WebSocket frames, not the application protocol running inside them, so it has no way to construct/send that command on the client's behalf (unlike HA's REST API, which authenticates via a plain `Authorization` header NGINX can inject on every request). The token will be visible in this file / the page source, same trade-off as `discover-players-ma.html`.
 
 ### NGINX Proxy Manager Setup
 
-As with Home Assistant, the browser talks only to a same-origin path; NGINX Proxy Manager forwards it (including the WebSocket upgrade) to the real MA server and appends the access token itself. See `npm-ma.conf` for a full example location block, written in the same style as `npm-ha.conf` (used for `now-playing-ha.html`).
+Even though NGINX can't handle authentication for MA, a reverse proxy is still worth using here to avoid mixed-content errors: the browser talks to a same-origin path, and NGINX forwards it (including the WebSocket upgrade) to the real MA server. See `npm-ma.conf` for a full example location block, written in the same style as `npm-ha.conf` (used for `now-playing-ha.html`).
 
 Key differences from the HA config:
 
-- MA authenticates via an `access_token` **query-string parameter**, not an `Authorization` header, so the token is injected via `rewrite` instead of `proxy_set_header`.
+- No token injection here — this location purely handles path rewriting and the WebSocket upgrade.
 - MA's real endpoints (`/ws`, `/imageproxy`) live at the server root with no prefix, so the rewrite strips `/api/ma` entirely (unlike HA, which keeps its `/api` prefix).
 - The WebSocket is a real, long-lived connection here (not unused boilerplate like in the HA config), so `proxy_read_timeout`/`proxy_send_timeout` are increased well beyond the default 60s to avoid nginx dropping an idle-but-open connection (e.g. during mobile/kiosk tab throttling).
 
@@ -70,9 +71,9 @@ Key differences from the HA config:
 2. Add a location:
    - **Location**: `/api/ma` (match `API_PATH`)
    - **Forward**: `http://<MA_IP>:8095`
-3. Paste the contents of `npm-ma.conf` as the custom NGINX config, replacing `<MA_TOKEN_HERE>` and the backend IP/port.
+3. Paste the contents of `npm-ma.conf` as the custom NGINX config, replacing the backend IP/port.
 
-Create the PAT under Music Assistant's user settings, same as before — it's just configured in NPM now instead of in the HTML file.
+Create the PAT under Music Assistant's user settings and put it in `MA_ACCESS_TOKEN` in `now-playing-ma.html`.
 
 ---
 
@@ -86,7 +87,7 @@ This is a one-time discovery tool, so it connects **directly** to your MA server
 
 | Variable | Description |
 |----------|-------------|
-| `MA_ACCESS_TOKEN` | Music Assistant PAT (used only here — `now-playing-ma.html` no longer stores one, see above) |
+| `MA_ACCESS_TOKEN` | Music Assistant PAT (same one used in `now-playing-ma.html`) |
 | `MA_WS_URL` | Direct WebSocket URL to your MA server, e.g. `ws://192.168.1.20:8095/ws` |
 
 ---

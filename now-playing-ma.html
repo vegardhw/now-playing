@@ -13,13 +13,12 @@
     // Set to true to use test data without Music Assistant connection
     const DEV_MODE = false;
 
-    // Music Assistant Personal Access Token (PAT) is no longer configured
-    // here. Instead, NGINX Proxy Manager injects it server-side into every
-    // request/connection under API_PATH (same approach as the HA file's
-    // Authorization header) so the token never appears in this file or in
-    // the page source. See README.md for the required NPM custom location
-    // config.
-    const MA_ACCESS_TOKEN = '';
+    // Music Assistant Personal Access Token (PAT). Unlike Home Assistant's
+    // REST API, MA's WebSocket auth requires the client itself to send an
+    // in-band "auth" command after connecting -- this cannot be injected by
+    // a reverse proxy (NGINX only sees raw frames, not the JSON protocol
+    // inside them), so the token must be configured here.
+    const MA_ACCESS_TOKEN = ''
 
     // Music Assistant player ID (e.g., 'sonos_roam' or full player_id from MA)
     const PLAYER_ID = ''
@@ -28,7 +27,9 @@
     // (proxies both the WebSocket at {API_PATH}/ws and REST endpoints like
     // {API_PATH}/imageproxy through to the MA server). Same-origin/relative
     // so the browser automatically uses wss:/https: when the page is served
-    // over TLS, avoiding mixed-content connection failures.
+    // over TLS, avoiding mixed-content connection failures. This only
+    // handles routing/upgrade -- it does NOT (and cannot) inject the auth
+    // token; see MA_ACCESS_TOKEN above and README.md for details.
     const API_PATH = '/api/ma';
 
     // ============================================
@@ -464,13 +465,12 @@
       }
     }
 
-    // Authenticate the WebSocket session using a PAT (client-side fallback).
-    // With the NGINX Proxy Manager token-injection setup described in
-    // README.md, MA_ACCESS_TOKEN is normally empty and this is a no-op --
-    // the connection is already authenticated by the proxy before it reaches
-    // the browser. This function only does anything if you choose to set
-    // MA_ACCESS_TOKEN directly in this file instead (e.g. for local testing
-    // without a reverse proxy).
+    // Authenticate the WebSocket session using a PAT. This is mandatory --
+    // MA's WebSocket API requires the client to send this in-band "auth"
+    // command after connecting (it cannot be authenticated by NGINX/a
+    // reverse proxy, since that would require understanding the JSON
+    // protocol running inside the WebSocket, not just the HTTP
+    // handshake/headers).
     function sendAuth() {
       if (!CONFIG.ACCESS_TOKEN) return null;
       if (!websocket || websocket.readyState !== WebSocket.OPEN) return null;
@@ -639,6 +639,11 @@
       if (CONFIG.DEV_MODE) {
         console.log('DEV MODE: Using static test data');
         updateDisplay(CONFIG.DEV_DATA);
+        return;
+      }
+
+      if (!CONFIG.ACCESS_TOKEN) {
+        showError('Missing Music Assistant access token (PAT).');
         return;
       }
 
