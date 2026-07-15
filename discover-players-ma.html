@@ -266,6 +266,11 @@
     }
 
     function connectWebSocket() {
+      if (!MA_ACCESS_TOKEN) {
+        updateStatus('Missing Music Assistant access token (PAT). Set MA_ACCESS_TOKEN before connecting — authentication is mandatory as of API schema 28+.', 'error');
+        return;
+      }
+
       const wsUrl = buildWebSocketUrl(MA_WS_URL);
       console.log('Connecting to Music Assistant:', wsUrl);
       updateStatus('Connecting to Music Assistant...');
@@ -279,16 +284,13 @@
 
           sendAuth();
 
-          // Request all players after a short delay
+          // Request all players after a short delay to let auth complete.
+          // `players/all` is the only valid command for this - older command
+          // names like players/get_all, players/list, get_players no longer
+          // exist in the current API.
           setTimeout(() => {
             updateStatus('Requesting player list...', 'connected');
-            
-            // Try multiple possible commands to get players
             sendCommand('players/all');
-            setTimeout(() => sendCommand('players/get_all'), 100);
-            setTimeout(() => sendCommand('players/list'), 200);
-            setTimeout(() => sendCommand('get_players'), 300);
-            
           }, 500);
         };
 
@@ -315,8 +317,6 @@
       if (websocket && websocket.readyState === WebSocket.OPEN) {
         updateStatus('Refreshing player list...', 'connected');
         sendCommand('players/all');
-        setTimeout(() => sendCommand('players/get_all'), 100);
-        setTimeout(() => sendCommand('players/list'), 200);
       } else {
         connectWebSocket();
       }
