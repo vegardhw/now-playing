@@ -14,17 +14,17 @@
     const DEV_MODE = false;
 
     // Music Assistant Personal Access Token (PAT)
-    const MA_ACCESS_TOKEN = '';
+    const MA_ACCESS_TOKEN = ''	
 
     // Music Assistant player ID (e.g., 'sonos_roam' or full player_id from MA)
-    const PLAYER_ID = '';
+    const PLAYER_ID = ''
 
     // Music Assistant server URL (WebSocket)
     // Default port is 8095 for Music Assistant
-    const MA_WS_URL = 'ws://192.168.1.20:8095/ws';
+    const MA_WS_URL = 'ws://192.168.1.10:8095/ws';
 
     // Music Assistant server base URL (for image proxying)
-    const MA_BASE_URL = 'http://192.168.1.20:8095';
+    const MA_BASE_URL = 'http://192.168.1.10:8095';
 
     // ============================================
   </script>
@@ -257,7 +257,6 @@
     let reconnectTimer = null;
     let messageId = 0;
     let authMessageId = null;
-    let subscribeMessageId = null;
     let updateTimer = null;
 
     // DOM elements
@@ -285,27 +284,24 @@
       return ++messageId;
     }
 
-    // Build image URL from Music Assistant image data
+    // Build image URL from a Music Assistant MediaItemImage object.
+    // As of API schema 28+, MediaItemImage no longer exposes a ready-to-use
+    // `url` field. Instead it provides `path` + `provider`, and a boolean
+    // `remotely_accessible` flag:
+    //   - remotely_accessible === true  -> `path` is already a direct,
+    //     publicly fetchable URL (e.g. hosted by the provider/CDN).
+    //   - remotely_accessible === false -> `path` is an internal/provider
+    //     specific reference that must be resolved through the server's
+    //     `/imageproxy?path=...&provider=...` endpoint.
     function buildImageUrl(imageData) {
-      if (!imageData) return null;
-      
-      // Music Assistant provides image paths that can be accessed via the server
-      // The image path could be a full URL or a relative path
-      if (imageData.path) {
-        // If it's already a full URL, use it directly
-        if (imageData.path.startsWith('http://') || imageData.path.startsWith('https://')) {
-          return addAccessTokenToUrl(imageData.path);
-        }
-        // Otherwise, construct URL using the MA base URL
-        return addAccessTokenToUrl(`${CONFIG.BASE_URL}${imageData.path}`);
+      if (!imageData || !imageData.path) return null;
+
+      if (imageData.remotely_accessible) {
+        return addAccessTokenToUrl(imageData.path);
       }
-      
-      // Fallback: use image_url if available
-      if (imageData.url) {
-        return addAccessTokenToUrl(imageData.url);
-      }
-      
-      return null;
+
+      const proxyUrl = `${CONFIG.BASE_URL}/imageproxy?path=${encodeURIComponent(imageData.path)}&provider=${encodeURIComponent(imageData.provider || '')}`;
+      return addAccessTokenToUrl(proxyUrl);
     }
 
     function addAccessTokenToUrl(url) {
@@ -362,11 +358,12 @@
         album = typeof mediaItem.album === 'string' ? mediaItem.album : mediaItem.album.name;
       }
 
-      // Get artwork URL
+      // Get artwork URL.
+      // Note: Track objects no longer carry a top-level `image` field; artwork
+      // now lives in `metadata.images[]`. QueueItem still has its own `image`
+      // as a fallback (e.g. for radio streams without track metadata).
       let artwork = null;
-      if (mediaItem.image) {
-        artwork = buildImageUrl(mediaItem.image);
-      } else if (mediaItem.metadata?.images && mediaItem.metadata.images.length > 0) {
+      if (mediaItem.metadata?.images && mediaItem.metadata.images.length > 0) {
         artwork = buildImageUrl(mediaItem.metadata.images[0]);
       } else if (queueItem.image) {
         artwork = buildImageUrl(queueItem.image);
@@ -533,49 +530,31 @@
 
     // Handle command responses
     function handleCommandResponse(data) {
-      if (subscribeMessageId && data.message_id === subscribeMessageId && data.error_code) {
-        console.warn('Event subscribe failed, switching to polling:', data.details || data.error_code);
-        startPolling();
-        return;
-      }
-
       if (data.error_code === 20) {
         console.warn('Authentication required. Sending auth command.');
         sendAuth();
         return;
       }
 
-      if (authMessageId && data.message_id === authMessageId) {
+      // Note: the server echoes message_id back as a string even when we
+      // send it as a number, so compare loosely/stringified.
+      if (authMessageId && String(data.message_id) === String(authMessageId)) {
         console.log('Auth response received');
       }
 
+      // Response to player_queues/get_active_queue is a PlayerQueue object
+      // (not a Player), with the current track under `current_item`.
+      // Note: the Player object itself has no `current_item`/track info, so
+      // there is no useful fallback via a players list response here.
       if (data.result && data.result.current_item) {
-        // This is a queue state response
         const trackData = extractTrackData(data.result.current_item);
-        
+
         if (trackData) {
           // Only update if track has changed
           const trackKey = `${trackData.title}-${trackData.artist}`;
           if (trackKey !== currentTrack) {
             currentTrack = trackKey;
             updateDisplay(trackData);
-          }
-        }
-      } else if (data.result && Array.isArray(data.result)) {
-        // This might be a players list response - find our player
-        const player = data.result.find(p => 
-          p.player_id === CONFIG.PLAYER_ID || 
-          p.name.toLowerCase().includes(CONFIG.PLAYER_ID.toLowerCase())
-        );
-        
-        if (player && player.current_item) {
-          const trackData = extractTrackData(player.current_item);
-          if (trackData) {
-            const trackKey = `${trackData.title}-${trackData.artist}`;
-            if (trackKey !== currentTrack) {
-              currentTrack = trackKey;
-              updateDisplay(trackData);
-            }
           }
         }
       }
@@ -594,10 +573,14 @@
 
           sendAuth();
 
-          // Subscribe to events for our player after auth
+          // As of the current API, event notifications (e.g. player_updated,
+          // queue_updated) are pushed automatically once connected/authenticated
+          // -- there is no separate "subscribe_events" command to send. We still
+          // run a low-frequency polling fallback as a safety net in case an
+          // event is ever missed.
           setTimeout(() => {
-            subscribeMessageId = sendCommand('subscribe_events');
             requestPlayerState();
+            startPolling();
           }, 300);
         };
 
