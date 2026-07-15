@@ -81,14 +81,16 @@ Create the PAT under Music Assistant's user settings and put it in `MA_ACCESS_TO
 
 Connects to Music Assistant and lists all available players with their IDs. Use this to look up the value for `PLAYER_ID` in `now-playing-ma.html`.
 
-This is a one-time discovery tool, so it connects **directly** to your MA server via its LAN `ws://` address rather than going through a reverse proxy — no NGINX setup required. Run it locally (e.g. open the file directly in a browser, or serve it over plain HTTP) rather than over HTTPS, since browsers block a plain `ws://` connection from a page loaded over `https://` (mixed content).
+It uses the same same-origin `API_PATH` approach as `now-playing-ma.html`, routed through the same NGINX Proxy Manager `/api/ma` custom location (see `npm-ma.conf`). This avoids the mixed-content `"The operation is insecure"` error that a raw `ws://` URL would trigger when the page is served over HTTPS.
 
-**Configuration** — edit the two variables at the top of the script block:
+If you'd rather run this one-off tool without going through NPM at all (e.g. quickly open the file locally against a LAN-only MA server), you can instead set `MA_WS_URL` back to a direct `ws://<MA_IP>:8095/ws` URL — just make sure you open the page itself over plain `http://` (or `file://`) in that case, not `https://`, or the browser will block the insecure WebSocket the same way.
+
+**Configuration** — edit the variables at the top of the script block:
 
 | Variable | Description |
 |----------|-------------|
 | `MA_ACCESS_TOKEN` | Music Assistant PAT (same one used in `now-playing-ma.html`) |
-| `MA_WS_URL` | Direct WebSocket URL to your MA server, e.g. `ws://192.168.1.20:8095/ws` |
+| `API_PATH` | Same NGINX proxy path used in `now-playing-ma.html`, e.g. `/api/ma` |
 
 ---
 
