@@ -112,6 +112,10 @@
 
   <script>
     // Configuration from now-playing-ma.html
+    // This is a one-time discovery tool - connect directly to your MA server
+    // via its LAN address (no reverse proxy needed). Run this page locally
+    // (not over HTTPS) or directly via file:// / http:// to avoid mixed-content
+    // restrictions when using a plain ws:// URL.
     const MA_ACCESS_TOKEN = '';
     const MA_WS_URL = 'ws://192.168.1.20:8095/ws';
 
